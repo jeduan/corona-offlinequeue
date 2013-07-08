@@ -1,13 +1,37 @@
 local sqlite = require 'sqlite3'
 local json = require 'json'
+local fiber = require 'fiber'
 local M = {}
 
-function M.newQueue(name, location)
-	local newObj = {
-		name = name or 'queue',
-		location = location or system.CachesDirectory,
+local function _extend(dest, src)
+	assert(type(dest) == 'table', 'Expected first arg to be a table')
+	assert(type(src) == 'table', 'Expected second arg to be a table')
+
+	for k, v in pairs(src) do
+		dest[k] = v
+	end
+
+	return dest
+end
+
+function M.newQueue(onResultOrParams)
+	local newObj
+
+	if type(onResultOrParams) == 'function' then
+		newObj = { onResult = onResultOrParams }
+	elseif type(onResultOrParams) == 'table' then
+		newObj = onResultOrParams
+		assert(newObj.onResult and type(newObj.onResult) == 'function', 'you have to specify an onResult parameter')
+	end
+
+	newObj = _extend(newObj, {
+		name = 'queue',
+		location = system.CachesDirectory,
 		interval = 5000,
-	}
+		debug = false,
+		detectNetwork = true,
+	})
+
 	M.__index = M
 
 	local instance = setmetatable(newObj, M)
@@ -21,18 +45,38 @@ function M:init()
 	local code, msg
 	self.db = sqlite3.open(path)
 	assert(self.db ~= nil, 'There was an error opening database ')
-	self.db:trace(function(udata, sql)
-		print('[SQL] ', sql)
-	end, {})
 
-	local stmt = self.db:prepare("SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type = 'table' AND name = 'queue'")
-	for row in stmt:nrows() do
-		if row.cnt == 0 then
-			print '[offlinequeue] Creating new schema'
-			local exec = self.db:exec[[CREATE TABLE queue (params TEXT NOT NULL)]]
-			assert(exec == sqlite.OK, 'There was an error creating the schema')
-		end
+	if self.debug then
+		self.db:trace(function(udata, sql)
+			print('[SQL] '.. sql)
+		end, {})
 	end
+
+	local stmt = self.db:prepare("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'queue'")
+	local step = stmt:step()
+	assert(step == sqlite.ROW, 'Failed to detect if schema already exists')
+
+	if stmt:get_value(0) == 0 then
+		print '[offlinequeue] Creating new schema'
+		local exec = self.db:exec[[CREATE TABLE queue (params TEXT NOT NULL)]]
+		assert(exec == sqlite.OK, 'There was an error creating the schema')
+	end
+
+
+	--Start!
+	self.timer = timer.performWithDelay(self.interval, function()
+		self:process()
+	end, 0)
+
+	if self.detectNetwork then
+		if network.canDetectNetworkStatusChanges then
+			network.setStatusListener("www.google.com", function(e)
+				self:networkListener(e)
+			end)
+		end
+
+	end
+
 end
 
 function M:close()
@@ -86,78 +130,118 @@ function M:filter(func)
 	end
 end
 
+function M:createReq(req)
+	req = _extend({
+		method = 'GET',
+		headers = {},
+	}, req)
+
+	return req
+end
+
 function M:process()
+	local result, ok, val
 	local stmt = self.db:prepare('SELECT ROWID, params FROM queue ORDER BY ROWID LIMIT 1')
 	assert(stmt, 'Failed to prepare queue-item-select statement')
-	local deleteStmt, step
-	local halt = false
 
-	coroutine.yield()
-	repeat
-		step = stmt:step()
-		if step == sqlite.DONE then
-			stmt:reset()
-			halt = true
+	fiber.new(function(wrap)
+		local networkRequest = wrap(function(req, done)
+			network.request(req.url, req.method, function(e)
+				if e.isError then
+					done(self.result.failureShouldPause)
+				else
+					done(self.result.success, e)
+				end
+			end, req.headers)
+		end)
 
-		elseif step == sqlite.ROW then
-			local row = stmt:get_named_values()
-			stmt:reset()
-			params = json.decode(row.params)
-			local result = coroutine.yield(params)
+		local deleteStmt, step, result, params, event
+		local halt = false
 
-			if result == self.result.success then
-				deleteStmt = deleteStmt or self.db:prepare("DELETE FROM queue WHERE rowid = ?")
-				deleteStmt:bind(1, row.rowid)
-				local _ = deleteStmt:step()
-				assert(_ == sqlite.DONE, 'Failed to delete queued item after execution')
-				deleteStmt:reset()
-				halt = false
-
-			elseif result == self.result.failureShouldPause then
+		repeat
+			step = stmt:step()
+			if step == sqlite.DONE then
+				stmt:reset()
 				halt = true
+
+			elseif step == sqlite.ROW then
+				local row = stmt:get_named_values()
+				stmt:reset()
+				params = json.decode(row.params)
+				if params.url then
+					params = self:createReq(params)
+					result, event = networkRequest(params)
+					if result == self.result.success then
+						local _result = self.onResult(event)
+
+						--Allow the user to pause the queue
+						if _result == self.result.failureShouldPause then
+							result = _result
+						end
+					end
+				else
+					result = self.onResult(params)
+
+				end
+
+				if result == self.result.success then
+					deleteStmt = deleteStmt or self.db:prepare("DELETE FROM queue WHERE rowid = ?")
+					deleteStmt:bind(1, row.rowid)
+					local _ = deleteStmt:step()
+					assert(_ == sqlite.DONE, 'Failed to delete queued item after execution')
+					deleteStmt:reset()
+					halt = false
+
+				elseif result == self.result.failureShouldPause then
+					halt = true
+
+				else
+					assert(false, 'expected function to return either success or failureShouldPause')
+					halt = true
+				end
 
 			else
-				assert(false, 'expected onAction to return either success or failureShouldPause')
-				halt = true
+				assert(false, 'Failed to select next queued item')
 			end
+		until halt
 
-		else
-			assert(false, 'Failed to select next queued item')
+		stmt:finalize()
+		stmt = nil
+		if deleteStmt then
+			deleteStmt:finalize()
+			deleteStmt = nil
 		end
-	until halt
+	end)
+end
 
-	stmt:finalize()
-	stmt = nil
-	if deleteStmt then
-		deleteStmt:finalize()
-		deleteStmt = nil
+function M:networkListener( event )
+	if not event.isReachable then
+		self:pause()
+	else
+		if not self.timer then
+			self:resume()
+		end
 	end
 end
 
-function M:main()
-	assert(type(self.onAction) == 'function', 'expected onAction to be a function')
-	local co = coroutine.create(function()
-		self:process()
-	end)
-
-	local result, ok, val
-	coroutine.resume(co)
-
-	while coroutine.status(co) ~= 'dead' do
-
-		ok, val = coroutine.resume(co, result)
-		assert(ok, val)
-
-		if val ~= nil then
-			result = self.onAction(val)
-		else
-			result = nil
-		end
+function M:pause()
+	if self.timer then
+		timer.cancel(self.timer)
+		self.timer = nil
 	end
+end
 
-	timer.performWithDelay(self.interval, function()
-		self:main()
-	end)
+function M:resume()
+	if not self.timer then
+		self.timer = timer.performWithDelay(self.interval, function()
+			self:process()
+		end, 0)
+	end
+end
+
+function M:quit()
+	timer.cancel(self.timer)
+	self.timer = nil
 end
 
 function M:clear()
