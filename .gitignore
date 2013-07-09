@@ -1,1 +1,4 @@
 .DS_Store
+build.settings
+config.lua
+main.lua
