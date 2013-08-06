@@ -1,6 +1,6 @@
 local sqlite = require 'sqlite3'
 local json = require 'json'
-local fiber = require 'fiber'
+local fiber = require 'vendor.fiber.fiber'
 local M = {}
 
 local function _extend(dest, src)

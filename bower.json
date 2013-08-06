@@ -2,9 +2,7 @@
   "name": "offlinequeue",
   "version": "0.1.0",
   "main": "offlinequeue.lua",
-  "ignore": [
-    "build.settings",
-    "main.lua",
-    "config.lua"
-  ]
+  "dependencies": {
+    "fiber": "~0.1.0"
+  }
 }
