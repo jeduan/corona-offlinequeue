@@ -1,6 +1,7 @@
 local sqlite = require 'sqlite3'
 local json = require 'json'
 local fiber = require 'vendor.fiber.fiber'
+local log = require 'vendor.log.log'
 local M = {}
 
 local function _extend(dest, src)
@@ -57,10 +58,11 @@ function M:init()
 	assert(step == sqlite.ROW, 'Failed to detect if schema already exists')
 
 	if stmt:get_value(0) == 0 then
-		print '[offlinequeue] Creating new schema'
+		log '[offlinequeue] Creating new schema'
 		local exec = self.db:exec[[CREATE TABLE queue (params TEXT NOT NULL)]]
 		assert(exec == sqlite.OK, 'There was an error creating the schema')
 	end
+	stmt:finalize()
 
 
 	--Start!
@@ -148,9 +150,9 @@ function M:process()
 		local networkRequest = wrap(function(req, done)
 			network.request(req.url, req.method, function(e)
 				if e.isError then
-					done(self.result.failureShouldPause)
+					done(false)
 				else
-					done(self.result.success, e)
+					done(true, e)
 				end
 			end, req.headers)
 		end)
@@ -171,11 +173,11 @@ function M:process()
 				if params.url then
 					params = self:createReq(params)
 					result, event = networkRequest(params)
-					if result == self.result.success then
+					if result == true then
 						local _result = self.onResult(event)
 
 						--Allow the user to pause the queue
-						if _result == self.result.failureShouldPause then
+						if _result == nil or _result == false then
 							result = _result
 						end
 					end
@@ -184,20 +186,16 @@ function M:process()
 
 				end
 
-				if result == self.result.success then
+				if result == false or result == nil then
+					halt = true
+
+				else
 					deleteStmt = deleteStmt or self.db:prepare("DELETE FROM queue WHERE rowid = ?")
 					deleteStmt:bind(1, row.rowid)
 					local _ = deleteStmt:step()
 					assert(_ == sqlite.DONE, 'Failed to delete queued item after execution')
 					deleteStmt:reset()
 					halt = false
-
-				elseif result == self.result.failureShouldPause then
-					halt = true
-
-				else
-					assert(false, 'expected function to return either success or failureShouldPause')
-					halt = true
 				end
 
 			else
@@ -252,11 +250,6 @@ end
 M.filterResult = {
 	attemptDelete = 0,
 	noChange = 1
-}
-
-M.result = {
-	success = 0,
-	failureShouldPause = -1
 }
 
 return M
