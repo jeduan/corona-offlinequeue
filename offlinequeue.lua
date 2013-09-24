@@ -135,7 +135,7 @@ end
 function M:createReq(req)
 	req = _extend({
 		method = 'GET',
-		headers = {},
+		params = {},
 	}, req)
 
 	return req
@@ -154,7 +154,7 @@ function M:process()
 				else
 					done(true, e)
 				end
-			end, req.headers)
+			end, req.params)
 		end)
 
 		local deleteStmt, step, result, params, event

@@ -1,6 +1,6 @@
 {
   "name": "offlinequeue",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "main": "offlinequeue.lua",
   "dependencies": {
     "fiber": "~0.1.0",
