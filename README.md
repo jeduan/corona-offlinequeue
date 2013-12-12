@@ -93,3 +93,4 @@ Instead of a function, you can pass a table with options to the `newQueue` metho
 * `interval` how frequently the queue will try to work
 * `debug` (boolean) log debug messages to the console. default `false`
 * `detectNetwork` (boolean) automatically pause/resume the queue if connection is lost. default: `true`
+* `preprocess` (function) processes an object before enqueuing. For example to add request headers.

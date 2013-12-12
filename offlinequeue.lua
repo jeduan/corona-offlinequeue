@@ -86,6 +86,10 @@ function M:close()
 end
 
 function M:enqueue(obj)
+	if self.debug then log('enqueuing', obj) end
+	if self.preprocess and type(self.preprocess) == 'function' then
+		obj = self.preprocess(obj)
+	end
 	local jsonobj = json.encode(obj)
 
 	local stmt = self.db:prepare("INSERT INTO queue (params) VALUES (?)")
@@ -138,6 +142,18 @@ function M:createReq(req)
 		params = {},
 	}, req)
 
+	req.params.body = req.body or req.params.body or nil
+	req.params.headers = req.headers or req.params.headers or {}
+
+	if req.params.body then
+		req.params.headers['Content-Type'] = req.params.headers['Content-Type'] or 'application/json'
+	end
+	if req.params.headers['Content-Type'] == 'application/json' then
+		if type(req.params.body) == 'table' then
+			req.params.body = json.encode(req.params.body)
+		end
+	end
+
 	return req
 end
 
@@ -148,7 +164,11 @@ function M:process()
 
 	fiber.new(function(wrap)
 		local networkRequest = wrap(function(req, done)
+			assert(req.url, "Requires an url")
+			if self.debug then log(req.method, req.params, req.url) end
+
 			network.request(req.url, req.method, function(e)
+				if self.debug then log('response', event) end
 				if e.isError then
 					done(false)
 				else
