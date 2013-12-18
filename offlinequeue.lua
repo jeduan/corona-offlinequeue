@@ -3,6 +3,7 @@ local json = require 'json'
 local fiber = require 'vendor.fiber.fiber'
 local log = require 'vendor.log.log'
 local M = {}
+M.inited = false
 
 local function _extend(dest, src)
 	assert(type(dest) == 'table', 'Expected first arg to be a table')
@@ -16,36 +17,36 @@ local function _extend(dest, src)
 end
 
 function M.newQueue(onResultOrParams)
-	local newObj
-
-	if type(onResultOrParams) == 'function' then
-		newObj = { onResult = onResultOrParams }
-	elseif type(onResultOrParams) == 'table' then
-		newObj = onResultOrParams
-		assert(newObj.onResult and type(newObj.onResult) == 'function', 'you have to specify an onResult parameter')
+	if M.inited then
+		return M
 	end
 
-	newObj = _extend({
-		name = 'queue',
-		location = system.CachesDirectory,
-		interval = 5000,
-		debug = false,
-		detectNetwork = true,
-	}, newObj)
+	local t
 
-	M.__index = M
+	if type(onResultOrParams) == 'function' then
+		t = { onResult = onResultOrParams }
+	elseif type(onResultOrParams) == 'table' then
+		t = onResultOrParams
+		assert(t.onResult and type(t.onResult) == 'function', 'you have to specify an onResult parameter')
+	end
 
-	local instance = setmetatable(newObj, M)
-	instance:init()
+	M.onResult = t.onResult
+	M.name = t.name or 'queue'
+	M.location = t.location or system.CachesDirectory
+	M.interval = t.interval or 5000
+	M.debug = t.debug or false
+	M.detectNetwork = t.detectNetwork or true
+	M:init()
 
-	return instance
+	return M
 end
 
 function M:init()
+	print 'EN INIT'
 	local path = system.pathForFile(self.name .. '.sqlite', self.location)
 	local code, msg
 	self.db = sqlite3.open(path)
-	assert(self.db ~= nil, 'There was an error opening database ')
+	assert(self.db, 'There was an error opening database ')
 
 	if self.debug then
 		self.db:trace(function(udata, sql)
@@ -64,7 +65,6 @@ function M:init()
 	end
 	stmt:finalize()
 
-
 	--Start!
 	self.timer = timer.performWithDelay(self.interval, function()
 		self:process()
@@ -79,6 +79,7 @@ function M:init()
 
 	end
 
+	self.inited = true
 end
 
 function M:close()
@@ -169,7 +170,6 @@ function M:process()
 			assert(req.url, "Requires an url")
 			if self.debug then log(req.method, req.params, req.url) end
 
-			print('ENVIANDO REQUEST', req.url, req.method)
 			network.request(req.url, req.method, function(e)
 				if self.debug then log('response', event) end
 				if e.isError then
@@ -190,14 +190,12 @@ function M:process()
 				halt = true
 
 			elseif step == sqlite.ROW then
-				print 'OBTUVO ROW'
 				local row = stmt:get_named_values()
 				stmt:reset()
 				params = json.decode(row.params)
 				if params.url then
 					params = self:createReq(params)
 					result, event = networkRequest(params)
-					print('result', result)
 					if result == true then
 						local _result = self.onResult(event)
 					end
@@ -207,7 +205,6 @@ function M:process()
 				end
 
 				if result == false or result == nil then
-					print('result', result)
 					halt = true
 
 				else

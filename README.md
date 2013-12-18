@@ -40,6 +40,8 @@ queue:enqueue{url = 'http://ip.jsontest.com'}
 
 the queue receives a function that must return either `true` (for successful processing) or `false/nil` (if the item should be retried)
 
+Please note that the queue is a singleton. Only one instance will be returned
+
 Enqueueing
 -----
 
