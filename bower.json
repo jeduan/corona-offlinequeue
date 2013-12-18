@@ -1,7 +1,15 @@
 {
   "name": "offlinequeue",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "main": "offlinequeue.lua",
+  "ignore": [
+    "config.lua",
+    "main.lua",
+    "build.settings",
+    "node_modules",
+    "server.js"
+    "test"
+  ],
   "dependencies": {
     "fiber": "~0.1.0",
     "log": "~0.1.0"
