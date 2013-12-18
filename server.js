@@ -6,18 +6,16 @@ app.use(express.logger('dev'))
 app.use(express.json())
 app.use(express.urlencoded())
 
-var timeout = 200
-
 app.all('/', function(req, res) {
   setTimeout(function() {
     res.send(req.body)
-  }, timeout)
+  }, 200)
 })
 
 app.all('/fail', function(req, res) {
   setTimeout(function() {
     res.send(500)
-  }, timeout)
+  }, 200)
 })
 
 http.createServer(app).listen(8080)

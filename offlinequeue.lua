@@ -25,13 +25,13 @@ function M.newQueue(onResultOrParams)
 		assert(newObj.onResult and type(newObj.onResult) == 'function', 'you have to specify an onResult parameter')
 	end
 
-	newObj = _extend(newObj, {
+	newObj = _extend({
 		name = 'queue',
 		location = system.CachesDirectory,
 		interval = 5000,
 		debug = false,
 		detectNetwork = true,
-	})
+	}, newObj)
 
 	M.__index = M
 
@@ -86,7 +86,6 @@ function M:close()
 end
 
 function M:enqueue(obj)
-	if self.debug then log('enqueuing', obj) end
 	if self.preprocess and type(self.preprocess) == 'function' then
 		obj = self.preprocess(obj)
 	end
@@ -116,6 +115,9 @@ function M:filter(func)
 
 	for row in stmt:nrows() do
 		jsonobj = json.decode(row.params)
+		if self.debug then
+			log('Found enqueued object', jsonobj)
+		end
 		local r = func(jsonobj)
 		if r == self.filterResult.attemptDelete then
 			deleteStmt = deleteStmt or self.db:prepare[[DELETE FROM queue WHERE ROWID = ?]]
@@ -167,12 +169,13 @@ function M:process()
 			assert(req.url, "Requires an url")
 			if self.debug then log(req.method, req.params, req.url) end
 
+			print('ENVIANDO REQUEST', req.url, req.method)
 			network.request(req.url, req.method, function(e)
 				if self.debug then log('response', event) end
 				if e.isError then
 					done(false)
 				else
-					done(true, e)
+					done(true, e, req.url, req.method)
 				end
 			end, req.params)
 		end)
@@ -187,19 +190,16 @@ function M:process()
 				halt = true
 
 			elseif step == sqlite.ROW then
+				print 'OBTUVO ROW'
 				local row = stmt:get_named_values()
 				stmt:reset()
 				params = json.decode(row.params)
 				if params.url then
 					params = self:createReq(params)
 					result, event = networkRequest(params)
+					print('result', result)
 					if result == true then
 						local _result = self.onResult(event)
-
-						--Allow the user to pause the queue
-						if _result == nil or _result == false then
-							result = _result
-						end
 					end
 				else
 					result = self.onResult(params)
@@ -207,6 +207,7 @@ function M:process()
 				end
 
 				if result == false or result == nil then
+					print('result', result)
 					halt = true
 
 				else

@@ -7,7 +7,7 @@
     "main.lua",
     "build.settings",
     "node_modules",
-    "server.js"
+    "server.js",
     "test"
   ],
   "dependencies": {
