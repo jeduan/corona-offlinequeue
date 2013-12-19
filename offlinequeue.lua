@@ -39,13 +39,13 @@ function M.newQueue(onResultOrParams)
 	M.detectNetwork = t.detectNetwork or true
 	M.maxAttempts = t.maxAttempts or 3
 	M.preprocess = t.preprocess
+	M.onFail = t.onFail
 	M:init()
 
 	return M
 end
 
 function M:init()
-	print 'EN INIT'
 	local path = system.pathForFile(self.name .. '.sqlite', self.location)
 	self.db = sqlite3.open(path)
 	assert(self.db, 'There was an error opening database ')
@@ -149,9 +149,11 @@ end
 
 function M:reenqueue(row)
 	local attempts = row.attempts + 1
+
 	if attempts >= self.maxAttempts then
-		print('FALLO')
-		--TODO llamar a una function
+		if self.onFail and type(self.onFail) == 'function' then
+			self.onFail(row.params)
+		end
 		return
 	end
 
@@ -165,6 +167,7 @@ function M:reenqueue(row)
 		attempts = attempts,
 		minProcess = os.time() + math.floor(self.enqueueDelay / 1000)
 	}
+
 	local _ = stmt:step()
 	assert(_ == sqlite.DONE, 'Failed to execute reenqueue-statement')
 	stmt:reset()

@@ -62,6 +62,8 @@ queue:enqueue {
 }
 ```
 
+By default the queue will send a request. If it receives a 404, 500 or other response not in the 2xx range, it will reenqueue it.
+
 Filtering methods
 ------
 
@@ -96,3 +98,6 @@ Instead of a function, you can pass a table with options to the `newQueue` metho
 * `debug` (boolean) log debug messages to the console. default `false`
 * `detectNetwork` (boolean) automatically pause/resume the queue if connection is lost. default: `true`
 * `preprocess` (function) processes an object before enqueuing. For example to add request headers.
+* `maxAttempts` (integer) defines how many times the queue will retry this request before giving up. (default 3)
+* `enqueueDelay` (integer) defines how many miliseconds to wait before retrying a failed request
+* `onFail` (function) this will receive the enqueued table when the request has failed more than `maxAttempts` times
