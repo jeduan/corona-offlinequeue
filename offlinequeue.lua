@@ -30,12 +30,15 @@ function M.newQueue(onResultOrParams)
 		assert(t.onResult and type(t.onResult) == 'function', 'you have to specify an onResult parameter')
 	end
 
-	M.onResult = t.onResult
+	M.onResult = t.onResult or function() return true; end
 	M.name = t.name or 'queue'
 	M.location = t.location or system.CachesDirectory
 	M.interval = t.interval or 5000
+	M.enqueueDelay = t.enqueueDelay or 20000
 	M.debug = t.debug or false
 	M.detectNetwork = t.detectNetwork or true
+	M.maxAttempts = t.maxAttempts or 3
+	M.preprocess = t.preprocess
 	M:init()
 
 	return M
@@ -135,12 +138,44 @@ function M:enqueue(obj)
 	jsonobj = nil
 end
 
+local deleteStmt
+function M:deleteRow(rowid)
+	deleteStmt = deleteStmt or self.db:prepare("DELETE FROM queue WHERE rowid = ?")
+	deleteStmt:bind(1, rowid)
+	local _ = deleteStmt:step()
+	assert(_ == sqlite.DONE, 'Failed to delete queued item after execution')
+	deleteStmt:reset()
+end
+
+function M:reenqueue(row)
+	local attempts = row.attempts + 1
+	if attempts >= self.maxAttempts then
+		print('FALLO')
+		--TODO llamar a una function
+		return
+	end
+
+	local stmt = self.db:prepare 'INSERT INTO queue (params, attempts, minProcess) VALUES (:params, :attempts, :minProcess)'
+	assert(stmt, 'Failed to prepare reenqueue-statement')
+
+	self:deleteRow(row.rowid)
+
+	stmt:bind_names{
+		params = row.params,
+		attempts = attempts,
+		minProcess = os.time() + math.floor(self.enqueueDelay / 1000)
+	}
+	local _ = stmt:step()
+	assert(_ == sqlite.DONE, 'Failed to execute reenqueue-statement')
+	stmt:reset()
+	stmt:finalize()
+end
+
 function M:filter(func)
 	local stmt = self.db:prepare[[SELECT ROWID, params FROM queue ORDER BY ROWID]]
 	assert(stmt, 'Failed to prepare filter statement')
 
 	local jsonobj
-	local deleteStmt = nil
 
 	for row in stmt:nrows() do
 		jsonobj = json.decode(row.params)
@@ -149,22 +184,12 @@ function M:filter(func)
 		end
 		local r = func(jsonobj)
 		if r == self.filterResult.attemptDelete then
-			deleteStmt = deleteStmt or self.db:prepare[[DELETE FROM queue WHERE ROWID = ?]]
-			local _ = deleteStmt:bind(1, row.rowid)
-			assert(_ == sqlite.OK, 'Failed to prepare queue-item-delete')
-
-			_ = deleteStmt:step()
-			assert(_ == sqlite.DONE, 'Failed to delete queued item after execution from filter')
-			deleteStmt:reset()
+			self:deleteRow(row.rowid)
 		end
 	end
 
 	stmt:finalize()
 	stmt = nil
-	if deleteStmt then
-		deleteStmt:finalize()
-		deleteStmt = nil
-	end
 end
 
 function M:createReq(req)
@@ -190,9 +215,9 @@ end
 
 function M:process()
 	local result, ok, val
-	local stmt = self.db:prepare('SELECT ROWID, params, attempts FROM queue WHERE processing=0 AND minProcess < ? ORDER BY ROWID LIMIT 1')
+	local stmt = self.db:prepare('SELECT ROWID, params, attempts FROM queue WHERE processing=0 AND minProcess < ? AND attempts < ? ORDER BY ROWID LIMIT 1')
 	assert(stmt, 'Failed to prepare queue-item-select statement')
-	stmt:bind(1, os.time())
+	stmt:bind_values(os.time(), self.maxAttempts)
 
 	fiber.new(function(wrap)
 		local networkRequest = wrap(function(req, done)
@@ -209,7 +234,7 @@ function M:process()
 			end, req.params)
 		end)
 
-		local deleteStmt, step, result, params, event, updateStmt, reinsertStmt, _
+		local step, result, params, event, updateStmt, reinsertStmt, _
 		local halt = false
 
 		repeat
@@ -231,28 +256,36 @@ function M:process()
 				assert(_ == sqlite.DONE, 'Failed to execute update-statement')
 				updateStmt:reset()
 
+				local okResponse
 				params = json.decode(row.params)
 				if params.url then
 					params = self:createReq(params)
 					result, event = networkRequest(params)
-					if result == true then
-						local _result = self.onResult(event)
+					if result then
+						okResponse = math.floor(event.status / 100) == 2
+						if not okResponse then
+							self:reenqueue(row)
+							okResponse = true
+						else
+							okResponse = self.onResult(event)
+						end
 					end
+
 				else
-					result = self.onResult(params)
+					okResponse = self.onResult(params)
 
 				end
 
-				if not result then
-					halt = true
+				if not okResponse then
+					self:reenqueue(row)
+				end
+
+				if result then
+					self:deleteRow(row.rowid)
+					halt = false
 
 				else
-					deleteStmt = deleteStmt or self.db:prepare("DELETE FROM queue WHERE rowid = ?")
-					deleteStmt:bind(1, row.rowid)
-					local _ = deleteStmt:step()
-					assert(_ == sqlite.DONE, 'Failed to delete queued item after execution')
-					deleteStmt:reset()
-					halt = false
+					halt = true
 				end
 
 			else
@@ -262,10 +295,6 @@ function M:process()
 
 		stmt:finalize()
 		stmt = nil
-		if deleteStmt then
-			deleteStmt:finalize()
-			deleteStmt = nil
-		end
 	end)
 end
 
