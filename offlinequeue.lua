@@ -72,10 +72,13 @@ function M:init()
 
 	local changedSchemaVersion = false
 	if schemaVersion < 1 then
-		exec = self.db:exec 'ALTER TABLE queue ADD status VARCHAR'
+		exec = self.db:exec 'ALTER TABLE queue ADD processing TINYINT DEFAULT 0 '
 		assert(exec == sqlite.OK, 'There was an error upgrading the queue schema ' .. self.db:errmsg())
 
 		exec = self.db:exec 'ALTER TABLE queue ADD attempts INTEGER DEFAULT 0'
+		assert(exec == sqlite.OK, 'There was an error upgrading the queue schema ' .. self.db:errmsg())
+
+		exec = self.db:exec 'ALTER TABLE queue ADD minProcess INTEGER'
 		assert(exec == sqlite.OK, 'There was an error upgrading the queue schema ' .. self.db:errmsg())
 
 		schemaVersion = schemaVersion + 1
@@ -114,10 +117,13 @@ function M:enqueue(obj)
 	end
 	local jsonobj = json.encode(obj)
 
-	local stmt = self.db:prepare("INSERT INTO queue (params) VALUES (?)")
-	assert(stmt, 'Failed to prepare enqueue-insert statement')
+	local stmt = self.db:prepare("INSERT INTO queue (params, minProcess) VALUES (?, ?)")
+	assert(stmt, 'Failed to prepare enqueue-insert statement ' .. self.db:errmsg())
 
 	local _ = stmt:bind(1, jsonobj)
+	assert(_ == sqlite.OK, 'Failed to prepare enqueue-insert statement')
+
+	local _ = stmt:bind(2, os.time())
 	assert(_ == sqlite.OK, 'Failed to prepare enqueue-insert statement')
 
 	_ = stmt:step()
@@ -184,8 +190,9 @@ end
 
 function M:process()
 	local result, ok, val
-	local stmt = self.db:prepare('SELECT ROWID, params FROM queue ORDER BY ROWID LIMIT 1')
+	local stmt = self.db:prepare('SELECT ROWID, params, attempts FROM queue WHERE processing=0 AND minProcess < ? ORDER BY ROWID LIMIT 1')
 	assert(stmt, 'Failed to prepare queue-item-select statement')
+	stmt:bind(1, os.time())
 
 	fiber.new(function(wrap)
 		local networkRequest = wrap(function(req, done)
@@ -202,7 +209,7 @@ function M:process()
 			end, req.params)
 		end)
 
-		local deleteStmt, step, result, params, event
+		local deleteStmt, step, result, params, event, updateStmt, reinsertStmt, _
 		local halt = false
 
 		repeat
@@ -214,6 +221,16 @@ function M:process()
 			elseif step == sqlite.ROW then
 				local row = stmt:get_named_values()
 				stmt:reset()
+
+				updateStmt = self.db:prepare 'UPDATE queue SET processing=1 WHERE rowid=?'
+				assert(updateStmt, 'Failed to prepare update-statement ' .. self.db:errmsg())
+
+				_ = updateStmt:bind_values(row.rowid)
+				assert(_ == sqlite.OK, 'Failed to bind update-statement')
+				_ = updateStmt:step()
+				assert(_ == sqlite.DONE, 'Failed to execute update-statement')
+				updateStmt:reset()
+
 				params = json.decode(row.params)
 				if params.url then
 					params = self:createReq(params)
@@ -226,7 +243,7 @@ function M:process()
 
 				end
 
-				if result == false or result == nil then
+				if not result then
 					halt = true
 
 				else
