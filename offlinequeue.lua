@@ -44,7 +44,6 @@ end
 function M:init()
 	print 'EN INIT'
 	local path = system.pathForFile(self.name .. '.sqlite', self.location)
-	local code, msg
 	self.db = sqlite3.open(path)
 	assert(self.db, 'There was an error opening database ')
 
@@ -54,16 +53,39 @@ function M:init()
 		end, {})
 	end
 
+	local exec
 	local stmt = self.db:prepare("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'queue'")
 	local step = stmt:step()
 	assert(step == sqlite.ROW, 'Failed to detect if schema already exists')
 
 	if stmt:get_value(0) == 0 then
 		log '[offlinequeue] Creating new schema'
-		local exec = self.db:exec[[CREATE TABLE queue (params TEXT NOT NULL)]]
+		exec = self.db:exec[[CREATE TABLE queue (params TEXT NOT NULL)]]
 		assert(exec == sqlite.OK, 'There was an error creating the schema')
 	end
 	stmt:finalize()
+
+	stmt = self.db:prepare 'PRAGMA user_version'
+	step = stmt:step()
+	local schemaVersion = stmt:get_value(0)
+	stmt:finalize()
+
+	local changedSchemaVersion = false
+	if schemaVersion < 1 then
+		exec = self.db:exec 'ALTER TABLE queue ADD status VARCHAR'
+		assert(exec == sqlite.OK, 'There was an error upgrading the queue schema ' .. self.db:errmsg())
+
+		exec = self.db:exec 'ALTER TABLE queue ADD attempts INTEGER DEFAULT 0'
+		assert(exec == sqlite.OK, 'There was an error upgrading the queue schema ' .. self.db:errmsg())
+
+		schemaVersion = schemaVersion + 1
+		changedSchemaVersion = true
+	end
+
+	if changedSchemaVersion then
+		exec = self.db:exec('PRAGMA user_version='..schemaVersion)
+		assert(exec == sqlite.OK, 'There was an upgrading schema version ' .. self.db:errmsg())
+	end
 
 	--Start!
 	self.timer = timer.performWithDelay(self.interval, function()
