@@ -152,7 +152,7 @@ function M:reenqueue(row)
 
 	if attempts >= self.maxAttempts then
 		if self.onFail and type(self.onFail) == 'function' then
-			self.onFail(row.params)
+			self.onFail(self, row.params)
 		end
 		return
 	end

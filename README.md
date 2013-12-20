@@ -100,4 +100,4 @@ Instead of a function, you can pass a table with options to the `newQueue` metho
 * `preprocess` (function) processes an object before enqueuing. For example to add request headers.
 * `maxAttempts` (integer) defines how many times the queue will retry this request before giving up. (default 3)
 * `enqueueDelay` (integer) defines how many miliseconds to wait before retrying a failed request
-* `onFail` (function) this will receive the enqueued table when the request has failed more than `maxAttempts` times
+* `onFail` (function) this will receive the enqueued table when the request has failed more than `maxAttempts` times. Receives the queue as first param and the request as second
