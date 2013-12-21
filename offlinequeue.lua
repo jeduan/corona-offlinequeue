@@ -154,6 +154,8 @@ function M:reenqueue(row)
 		if self.onFail and type(self.onFail) == 'function' then
 			self.onFail(self, row.params)
 		end
+		self:deleteRow(row.rowid)
+
 		return
 	end
 
@@ -270,12 +272,12 @@ function M:process()
 							self:reenqueue(row)
 							okResponse = true
 						else
-							okResponse = self.onResult(event)
+							okResponse = self.onResult(self, event)
 						end
 					end
 
 				else
-					okResponse = self.onResult(params)
+					okResponse = self.onResult(self, params)
 
 				end
 

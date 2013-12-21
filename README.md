@@ -91,7 +91,7 @@ Options
 ------
 Instead of a function, you can pass a table with options to the `newQueue` method
 
-* `onResult` is the function that must return `true` or `nil`. Required
+* `onResult` is the function that must return `true` or `nil`. Arguments: (queue, event)
 * `name` the name of the database used for storing the queue. default: `queue`
 * `location` the location of the database. default: `system.CachesDirectory`
 * `interval` how frequently the queue will try to work
