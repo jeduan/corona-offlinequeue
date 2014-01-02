@@ -27,7 +27,6 @@ function M.newQueue(onResultOrParams)
 		t = { onResult = onResultOrParams }
 	elseif type(onResultOrParams) == 'table' then
 		t = onResultOrParams
-		assert(t.onResult and type(t.onResult) == 'function', 'you have to specify an onResult parameter')
 	end
 
 	M.onResult = t.onResult or function() return true; end
